@@ -273,7 +273,7 @@ What is all the fuss about?
 ## What is a P-Value? {.center}
 
 - **A p-value is "the probability under a specified statistical model that a statistical summary of the data (e.g., the sample mean difference between two compared groups) would be equal to or more extreme than its observed value"** [@wasserstein2016].
-- This definition is technically correct, but what does it really mean? This question is the source of great debate [@aschwanden2015; @wasserstein2016; @gelman2016; @schervish1996; @greenland2016]!
+- This definition is technically correct, but what does it really mean? This question is the source of great debate [@schervish1996;  @aschwanden2015; @gelman2016; @greenland2016; @wasserstein2016]!
 - Put simply (but not technically correctly), p-values are a measure of how surprising the observed data would be if the null hypothesis (that no effect exists in the population) is true.
 
 ## Regression Example {.center}
@@ -333,7 +333,7 @@ create_regression_table(lm_results)
 
 - Early uses of significance testing date to the 1700s (Laplace, Arbuthnot), with modern form emerging ~1900s (Pearson, Gosset).
 - Ronald A. Fisher [-@fisher1936] formalized p-value in Statistical Methods for Research Workers, suggesting p=0.05 as a convenient cutoff.
-- Neyman-Pearson [-@neyman1933a, -@neyman1933b] introduced formal hypothesis testing with pre-chosen $\alpha$ (0.05).
+- Neyman-Pearson [-@neyman1933a; -@neyman1933b] introduced formal hypothesis testing with pre-chosen $\alpha$ (0.05).
 - Fisher later regretted the use of a rigid threshold like 0.05, but it remains ingrained in practice.
 - **Takeaway:** p-values grew from Fisher’s flexible idea into an oft-rigid threshold, setting the stage for current debates.
 
@@ -510,7 +510,7 @@ Recommendations for using p-values
 - This approach is rooted in the idea that the size of the effect is the bit that is directly grounded in the model's context.
 - A p-value doesn't tell us anything about the outcome we are studying. The effect size does.
 
-## P-Values as a Diagnostic (or Descriptive) Tool {.center}
+## Diagnostic (or Descriptive) P-Values {.center}
 
 - P-values do not tell you whether the results of your analysis are real, correct, or substantively important. But I don't think p-values should be dismissed entirely.
 - Instead, we should use p-values as a tool for checking if we have enough data to observe the effect we are studying.
@@ -560,7 +560,7 @@ Summarising what we've learned
 - We should scrap statistical significance and focus on measuring effect sizes.
 - P-values and statistical significance was only ever a cheap shortcut, but doing science (or analytics) well is hard. We shouldn't take shortcuts.
 
-## Further Reading  {.center}
+## Further Reading {.center}
 
 - Denworth - [The Significant Problem of P-Values](https://www.scientificamerican.com/article/the-significant-problem-of-p-values/)
 - 538's Science Coverage:
@@ -586,7 +586,6 @@ Contact:
 {{< fa solid envelope >}} [paul.johnson50@nhs.net](mailto: paul.johnson50@nhs.net)
 </ul>
 
-
 Code & Slides:
 <br>
 
@@ -595,3 +594,8 @@ Code & Slides:
 </ul>
 
 ## References
+
+::: {.small}
+::: {#refs}
+:::
+:::
