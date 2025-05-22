@@ -1,0 +1,19 @@
+[project]
+name = "matters-of-significance"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "great-tables>=0.17.0",
+    "ipykernel>=6.29.5",
+    "jupyter-cache>=1.0.1",
+    "jupyterlab>=4.4.2",
+    "numpy>=2.2.5",
+    "pandas>=2.2.3",
+    "polars>=1.29.0",
+    "pyarrow>=20.0.0",
+    "scipy>=1.15.3",
+    "seaborn>=0.13.2",
+    "statsmodels>=0.14.4",
+]
