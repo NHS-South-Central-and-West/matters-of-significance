@@ -280,7 +280,7 @@ What is all the fuss about?
 
 ```{python}
 #| label: tbl-regression
-#| tbl-cap: Linear Regression Results (N = 200))
+#| tbl-cap: Linear Regression Results (N = 200)
 
 # set random seed
 np.random.seed(42)
