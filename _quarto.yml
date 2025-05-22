@@ -1,0 +1,48 @@
+project:
+  type: website
+
+format: 
+  revealjs:
+    menu: false
+    controls: false
+    section-divs: true
+    preview-links: true
+    embed-resources: true
+    link-external-newwindow: true
+    transition: fade
+    background-transition: fade
+    navigation-mode: linear
+    email-obfuscation: javascript
+    theme: theme.scss
+    footer: '**Paul Johnson //** Matters of Significance **//** May 22, 2025'
+    progress: true
+    multiplex: false
+    scrollable: false
+    hide-inactive-cursor: true
+    highlight-style: printing
+    pause: true
+    fig-width: 6
+    fig-height: 7
+    fig-align: center
+    output-location: column
+    fig-cap-location: top
+
+editor: source
+
+execute:
+  freeze: auto
+  echo: true
+  warning: false
+
+revealjs-plugins:
+  - verticator
+
+code-link: true
+
+title-slide-attributes:
+    data-background-image: "assets/images/logo.jpg"
+    data-background-position: "right 5% bottom 5%"
+    data-background-size: "22%"
+    data-background-opacity: "1"
+
+from: markdown+emoji

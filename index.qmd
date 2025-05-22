@@ -1,0 +1,597 @@
+---
+title: Matters of Significance
+subtitle: The Misuse & Abuse of P-Values in Analytics
+author: Paul Johnson
+bibliography: references.bib
+---
+
+```{python}
+#| label: setup
+#| include: false
+
+import numpy as np
+import pandas as pd
+import polars as pl
+import seaborn as sns
+import matplotlib.pyplot as plt
+import scipy.stats as st
+import statsmodels.api as sm
+from great_tables import GT, style, loc, html
+
+sns.set_theme(style="white")
+sns.set_context("talk")
+colors = {"0.0": "#ADB6BE", "0.2": "#005EB8"}
+```
+
+```{python}
+#| label: simulation-helper-functions
+#| include: false
+
+def simulate_pvals(effects, sample_sizes, n_sim):
+    """
+    Simulate t-tests with varying effect sizes and sample sizes.
+    
+    Args:
+        effects: List of effect sizes (mean differences)
+        sample_sizes: List of sample sizes to test
+        n_sim: Number of simulations per condition
+        
+    Returns:
+        DataFrame with effect size, sample size, and p-value for each simulation
+    """
+    # generate records for all combinations of effects, sample sizes, and simulations
+    records = [
+        {
+          "effect": f"{mu:.1f}",
+          "N": N,
+          "p": st.ttest_ind(
+                  np.random.normal(mu, 1, N),  # treatment group with effect
+                  np.random.normal(0, 1, N),   # control group
+                  equal_var=True
+                )[1]  # extract p-value from t-test result
+        }
+        for mu in effects
+        for N in sample_sizes
+        for _ in range(n_sim)
+    ]
+    return pl.DataFrame(records)
+
+def simulate_multiple_comparisons(n_tests=50, n_sims=1000, alpha=0.05, sample_size=30):
+    """
+    Simulate multiple comparison problem.
+
+    Args:
+        n_tests: Number of tests per simulation
+        n_sims: Number of simulation runs
+        alpha: Significance threshold
+        sample_size: Sample size per group
+
+    Returns:
+        DataFrame with false positive counts per simulation
+    """
+    np.random.seed(3)
+    false_pos = []
+
+    for sim in range(n_sims):
+        # run n_tests t-tests with no true effect
+        pvals = []
+        for test in range(n_tests):
+            data1 = np.random.normal(0, 1, sample_size)  # group 1 (no effect)
+            data2 = np.random.normal(0, 1, sample_size)  # group 2 (no effect)
+            # calculate t-statistic manually
+            t_stat = (data1.mean() - data2.mean()) / np.sqrt(
+                np.var(data1, ddof=1)/sample_size + np.var(data2, ddof=1)/sample_size)
+            # calculate two-tailed p-value
+            p = 2 * (1 - st.t.cdf(abs(t_stat), 2*sample_size-2))
+            pvals.append(p)
+
+        # count tests with p < alpha (false positives)
+        false_pos.append(np.sum(np.array(pvals) < alpha))
+
+    return pl.DataFrame({"false_positives": false_pos})
+```
+
+```{python}
+#| label: report-helper-functions
+#| include: false
+
+def report_metrics(df: pl.DataFrame, n: int, alpha: float = 0.05) -> None:
+    """
+    Report metrics for specified sample size including false positive rate and power.
+    
+    Args:
+        df: DataFrame with simulation results
+        n: Sample size to analyze
+        alpha: Significance threshold
+    """
+    # filter for specified sample size and calculate significance
+    sub = (
+        df
+        .filter(pl.col("N") == n)
+        .with_columns((pl.col("p") < alpha).alias("sig"))  # mark significant results
+        .group_by("effect")
+        .agg([
+            pl.col("sig").sum().alias("n_sig"),  # count significant results
+            pl.len().alias("total"),              # total simulations
+            pl.col("p").mean().alias("mean_p")    # average p-value
+        ])
+        .with_columns((pl.col("n_sig") / pl.col("total")).alias("rate"))  # calculate rate
+        .sort("effect")
+    )
+
+    # convert to pandas for easier extraction
+    pdf = sub.to_pandas()
+    n_sims = int(pdf["total"].iloc[0])
+
+    # extract metrics by effect size
+    null_metrics = pdf[pdf["effect"] == "0.0"].iloc[0]  # null hypothesis (no effect)
+    alt_metrics = pdf[pdf["effect"] == "0.2"].iloc[0]   # alternative hypothesis (with effect)
+
+    false_positives = float(null_metrics["rate"])  # type I error rate
+    power = float(alt_metrics["rate"])             # statistical power
+
+    print("Simulation Results:")
+    print(f"- Sample Size Per Group: {n}")
+    print(f"- Simulations Per Condition: {n_sims}")
+    print(f"- False Positive Rate (H₀): {false_positives:.2f} (Expected: {alpha:.2f})")
+    print(f"- Statistical Power (H₁): {power:.2f} (Target: 0.8)")
+
+    null_p = float(null_metrics["mean_p"])
+    alt_p = float(alt_metrics["mean_p"])
+
+    print(f"- Mean p-value (H₀ vs H₁): {null_p:.2f} vs {alt_p:.2f}")
+
+    print()
+
+def report_multiple_comparisons(df, n_tests=50, n_sims=1000, alpha=0.05):
+    """
+    Report key findings from multiple comparisons simulation.
+
+    Args:
+        df: DataFrame with false_positives column
+        n_tests: Number of tests per simulation
+        n_sims: Number of simulation runs
+        alpha: Significance threshold
+    """
+    false_pos = df["false_positives"].to_numpy()
+    mean_false_pos = np.mean(false_pos)
+    pct_at_least_one = np.mean([fp >= 1 for fp in false_pos]) * 100
+    expected = alpha * n_tests  # expected false positives by chance
+
+    print(f"Simulation Results:")
+    print(f"- Average number of false positives: {mean_false_pos:.2f}")
+    print(f"- Probability of at least one false positive: {pct_at_least_one:.1f}%")
+    print(f"- Expected number of false positives: {expected}")
+```
+
+```{python}
+#| label: table-helper-functions
+#| include: false
+
+def create_regression_table(results):
+    """
+    Create formatted regression table using great_tables.
+
+    Args:
+        results: statsmodels regression results
+
+    Returns:
+        GT table object
+    """
+
+    coef, se, t, p = results.params, results.bse, results.tvalues, results.pvalues
+    ci = results.conf_int(alpha=0.05)
+    df = (
+        pd.DataFrame({
+            'term': coef.index.str.replace('const', 'Intercept'),
+            'coef': coef.values,
+            'se': se.values,
+            't': t.values,
+            'p': p.values,
+            'low': ci[0].values,
+            'high': ci[1].values
+        })
+        .assign(
+            stars=lambda d: np.select(
+                [d.p<0.001, d.p<0.01, d.p<0.05],
+                ['***','**','*'],
+                ''
+            ),
+            Estimate=lambda d: (
+                d.coef.round(2).astype(str)
+                + d.stars
+                + '<br>['
+                + d.low.round(2).astype(str)
+                + ', '
+                + d.high.round(2).astype(str)
+                + ']'
+            )
+        )
+        [['term','Estimate','se','t','p']]
+    )
+    tbl = (
+        GT(df, rowname_col='term')
+        .fmt_markdown(columns='Estimate')
+        .fmt_number(columns=['se','t'], decimals=2)
+        .fmt_number(columns=['p'], decimals=3)
+        .tab_spanner('Outcome = y', ['Estimate','se','t','p'])
+        .tab_style(style.text(color='#D93649', weight='bold'), locations=loc.body(columns='p'))
+        .cols_align(align='center')
+        .cols_label(
+            term="Term",
+            Estimate=html("Estimate<br>(95% CI)"),
+            se="Std. Error",
+            t="t-statistic",
+            p="p-value"
+        )
+        .tab_source_note("* p<0.05; ** p<0.01; *** p<0.001")
+        .tab_source_note(
+            html(f"R<sup>2</sup>={results.rsquared:.3f}; "
+            f"Adj. R<sup>2</sup>={results.rsquared_adj:.3f}")
+        )
+        .tab_options(table_width="100%")
+    )
+    return tbl
+
+def format_power_table(df):
+    """
+    Format power analysis results table with proper labels and formatting.
+
+    Args:
+        df: DataFrame with sample sizes and rejection rates
+
+    Returns:
+        Formatted great_tables (GT) object
+    """
+    # create table with proper formatting
+    tbl = (
+        GT(df)
+        .fmt_number(columns="rejection_rate", decimals=2)  # format proportions
+        .cols_label(
+            N="Sample Size",
+            non_sig_count="Rejections",
+            rejection_rate="Proportion"
+        )
+        .cols_align(align="center")  # center-align all columns
+        .tab_source_note("Effect = 0.2, 1000 Simulations")
+        .tab_options(table_width="100%")
+    )
+
+    return tbl
+```
+
+##  Why Should We Care? {.center}
+
+- P-values and "statistical significance" are widespread in statistics and analytics--but they are controversial.
+- If you have been exposed to these ideas before, you have probably been taught a way of doing things that is now widely discredited.
+- Addressing these issues is difficult because the consensus among experts hasn't filtered through to the teaching.
+
+# The Dreaded P-Value {data-background-color="#425563" data-verticator="#E8EDEE"}
+
+What is all the fuss about?
+
+## What is a P-Value? {.center}
+
+- **A p-value is "the probability under a specified statistical model that a statistical summary of the data (e.g., the sample mean difference between two compared groups) would be equal to or more extreme than its observed value"** [@wasserstein2016].
+- This definition is technically correct, but what does it really mean? This question is the source of great debate [@aschwanden2015; @wasserstein2016; @gelman2016; @schervish1996; @greenland2016]!
+- Put simply (but not technically correctly), p-values are a measure of how surprising the observed data would be if the null hypothesis (that no effect exists in the population) is true.
+
+## Regression Example {.center}
+
+```{python}
+#| label: tbl-regression
+#| tbl-cap: Linear Regression Results (N = 200))
+
+# set random seed
+np.random.seed(42)
+
+# sample size
+N = 200
+
+# generate predictors + noise
+x1, x2, x3, noise = [np.random.normal(size=N) for _ in range(4)]
+
+# outcome with specified effects
+y = 1 + 0.1 * x1 + 0.5 * x2 + 0.01 * x3 + noise
+
+# create dataframe
+df = pd.DataFrame(dict(y=y, x1=x1, x2=x2, x3=x3))
+
+# fit ols model
+X = sm.add_constant(df[['x1', 'x2', 'x3']])
+lm_results = sm.OLS(df.y, X).fit()
+
+# render regression table
+create_regression_table(lm_results)
+```
+
+## It is All This Guy's Fault {.center}
+
+![Ronald A. Fisher](assets/images/nerds/fisher.webp)
+
+## And a Little Bit These Guys {.center}
+
+::: {layout-ncol=2}
+
+![Jerzy Neyman](assets/images/nerds/neyman.jpg)
+
+![Egon Pearson](assets/images/nerds/egon-pearson.png)
+
+:::
+
+## And These Two Didn't Help {.center}
+
+::: {layout-ncol=2}
+
+![Pierre Simon Laplace](assets/images/nerds/laplace.jpg){width=75%}
+
+![Karl Pearson](assets/images/nerds/karl-pearson.jpg)
+
+:::
+
+## A Brief History of P-Values {.center}
+
+- Early uses of significance testing date to the 1700s (Laplace, Arbuthnot), with modern form emerging ~1900s (Pearson, Gosset).
+- Ronald A. Fisher [-@fisher1936] formalized p-value in Statistical Methods for Research Workers, suggesting p=0.05 as a convenient cutoff.
+- Neyman-Pearson [-@neyman1933a, -@neyman1933b] introduced formal hypothesis testing with pre-chosen $\alpha$ (0.05).
+- Fisher later regretted the use of a rigid threshold like 0.05, but it remains ingrained in practice.
+- **Takeaway:** p-values grew from Fisher’s flexible idea into an oft-rigid threshold, setting the stage for current debates.
+
+## Common Misinterpretations & Misuses {.center}
+
+- P-values and "statistical significance" are often misused. Sometimes deliberately.
+- They are often used as proof the effect is real or substantively important.
+- They are often treated as a measure of the strength of the effect, and as the most important piece of evidence in an anylsis.
+- We rarely acknowledge that it can vary from sample to sample and that multiple comparisons can lead to false positives.
+- P-hacking and other such practices can deliberately mislead.
+- Statistical significance encourages a flawed way of thinking.
+- And many, many more [@greenland2016].
+
+# Visualising the Problem {data-background-color="#425563" data-verticator="#E8EDEE"}
+
+Using simulations to demonstrate issues with p-values
+
+## Simulate P-Value Distributions {.center}
+
+- Simulating 1,000 t-tests on zero effect (null) and 0.2 effect (alt), iteratively increasing sample size.
+- How should we expect p-values for the null and alt to be distributed? And how will sample size influence the distribution?
+
+```{python}
+#| label: simulate-p-values
+#| output-location: default
+#| cache: true
+
+np.random.seed(42) # set random seed
+n_sims = 1000 # number of simulations
+effects = [0.0, 0.2] # simulated effect sizes
+sample_sizes = [10, 20, 50, 100, 250, 500, 1000] # simulated sample sizes
+
+# simulate p-values
+p_values = simulate_pvals(effects, sample_sizes, n_sims)
+```
+
+## P-Value Distributions (n=50) {.center}
+
+```{python}
+#| label: fig-sample-size-50
+#| fig-cap: n = 50 per group, 1000 simulations
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+sns.histplot(
+    data=p_values.filter(pl.col("N") == 50).to_pandas(),
+    x="p", hue="effect", palette=colors,
+    alpha=0.7,  bins=20, edgecolor=".3"
+)
+
+ax.axvline(x=0.05, color='#D93649', linestyle='--', linewidth=5)
+
+ax.get_legend().set_title("Effect Size")
+plt.ylabel("Simulations")
+plt.xlabel("P-Value")
+
+plt.xlim(0, 1)
+plt.tight_layout()
+plt.show()
+
+report_metrics(p_values, n=50)
+```
+
+## P-Value Distributions (n=100) {.center}
+
+```{python}
+#| label: fig-sample-size-100
+#| fig-cap: n = 100 per group, 1000 simulations
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+sns.histplot(
+    data=p_values.filter(pl.col("N") == 100).to_pandas(),
+    x="p", hue="effect", palette=colors,
+    alpha=0.8,  bins=20, edgecolor=".3"
+)
+
+ax.axvline(x=0.05, color='#D93649', linestyle='--', linewidth=5)
+
+ax.get_legend().set_title("Effect Size")
+plt.ylabel("Simulations")
+plt.xlabel("P-Value")
+
+plt.xlim(0, 1)
+plt.tight_layout()
+plt.show()
+
+report_metrics(p_values, n=100)
+```
+
+## P-Value Distributions (n=500) {.center}
+
+```{python}
+#| label: fig-sample-size-500
+#| fig-cap: n = 500 per group, 1000 simulations
+
+fig, ax = plt.subplots(figsize=(8, 6))
+
+sns.histplot(
+    data=p_values.filter(pl.col("N") == 500).to_pandas(),
+    x="p", hue="effect", palette=colors,
+    alpha=0.7,  bins=20, edgecolor="black"
+)
+
+plt.axvline(x=0.05, color='#D93649', linestyle='--', linewidth=5)
+
+ax.get_legend().set_title("Effect Size")
+plt.ylabel("Simulations")
+plt.xlabel("P-Value")
+
+plt.xlim(0, 1)
+plt.tight_layout()
+plt.show()
+
+report_metrics(p_values, n=500)
+```
+
+<!-- https://stats.andrewheiss.com/hack-your-way/ -->
+
+## Simulate Multiple Comparisons {.center}
+
+- Simulating running 50 tests where there is zero effect.
+- Running the simulation 1,000 times.
+- How often would we observe a "statistically significant" effect in at least one test?
+
+```{python}
+#| label: simulate-multiple-comparisons
+#| output-location: default
+#| cache: true
+
+np.random.seed(42) # set random seed
+n_sims = 1000 # number of simulations
+n_tests = 50 # number of tests per simulation
+alpha = 0.05 # significance threshold
+
+# simulate multiple comparisons
+multiple_comparisons = simulate_multiple_comparisons(n_tests, n_sims, alpha)
+```
+
+## Multiple Comparison Problems {.center}
+
+```{python}
+#| label: fig-multiple-comparisons
+#| fig-cap: 1000 simulations × 50 tests, no true effects
+
+expected = alpha * n_tests
+fig, ax = plt.subplots(figsize=(8, 6))
+
+sns.histplot(
+    data=multiple_comparisons.to_pandas(), x="false_positives",
+    bins=range(0, 12), color="#005EB8", edgecolor="black"
+)
+
+plt.axvline(x=expected, color='#D93649', linestyle='--', linewidth=5)
+
+plt.xlabel("False Positives (p < 0.05)")
+plt.xticks(range(0, 11, 1))
+plt.legend([f"Expected ({n_tests} × {alpha} = {expected})"])
+
+plt.tight_layout()
+plt.show()
+
+report_multiple_comparisons(multiple_comparisons, n_tests, n_sims, alpha)
+```
+
+# Solutions to a Significant Problem {data-background-color="#425563" data-verticator="#E8EDEE"}
+
+Recommendations for using p-values
+
+## Focus on Measuring Effect Sizes {.center}
+
+- Any analysis should focus on the magnitude and direction of the effect above all else.
+- The effect estimates are the part of the model that matters, and everything else, including p-values, is there to help measure model fit and identify potential issues.
+- This approach is rooted in the idea that the size of the effect is the bit that is directly grounded in the model's context.
+- A p-value doesn't tell us anything about the outcome we are studying. The effect size does.
+
+## P-Values as a Diagnostic (or Descriptive) Tool {.center}
+
+- P-values do not tell you whether the results of your analysis are real, correct, or substantively important. But I don't think p-values should be dismissed entirely.
+- Instead, we should use p-values as a tool for checking if we have enough data to observe the effect we are studying.
+    - We are capable of asking questions and designing analyses where the effect will not be zero [@gelman2021].
+    - If we start by assuming there _is_ an effect, p-values tell us whether we have enough data to observe that effect.
+- Additionally, I think there is still value in using p-values as a quick check to identify whether two groups are different, or other similar descriptive questions, but p-values themselves are not a causal measure.
+
+## Same Effect, Different Sample Sizes {.center}
+
+```{python}
+#| label: tbl-p-values
+#| tbl-cap: Proportion of Non-Significant Results (p > 0.05)
+
+summary = (
+    p_values
+    .filter(pl.col("effect") == "0.2")
+    .with_columns((pl.col("p") > 0.05).alias("non_sig"))
+    .group_by("N")
+    .agg([
+        pl.col("non_sig").sum().alias("non_sig_count"),
+        pl.len().alias("total")
+    ])
+    .with_columns(
+        (pl.col("non_sig_count") /
+        pl.col("total")).alias("rejection_rate")
+    )
+    .select(["N", "non_sig_count", "rejection_rate"])
+    .sort("N")
+)
+
+format_power_table(summary)
+```
+
+## Scrap Statistical Significance {.center}
+
+- While I am less of an evangelist when it comes to p-values, I won't say the same for statistical significance.
+- Using a cutoff point for deciding whether an analysis is useful or not is bad practice.
+- "The difference between 'significant' and 'not significant' is not itself statistically significant" [@gelman2006].
+
+# Wrapping Up {data-background-color="#425563" data-verticator="#E8EDEE"}
+
+Summarising what we've learned
+
+## Key Takeaways {.center}
+
+- P-values are a useful tool, but we need to give them significantly less weight in the analysis process.
+- We should scrap statistical significance and focus on measuring effect sizes.
+- P-values and statistical significance was only ever a cheap shortcut, but doing science (or analytics) well is hard. We shouldn't take shortcuts.
+
+## Further Reading  {.center}
+
+- Denworth - [The Significant Problem of P-Values](https://www.scientificamerican.com/article/the-significant-problem-of-p-values/)
+- 538's Science Coverage:
+    - Aschwanden - [Not Even Scientists Can Easily Explain P-values](https://fivethirtyeight.com/features/not-even-scientists-can-easily-explain-p-values/)
+    - Aschwanden - [It’s Time To Stop Misusing P-Values](https://fivethirtyeight.com/features/statisticians-found-one-thing-they-can-agree-on-its-time-to-stop-misusing-p-values/)
+    - Aschwanden - [Science Isn't Broken](https://fivethirtyeight.com/features/science-isnt-broken/)
+- Gelman & Loken – [The Garden of Forking Paths](https://sites.stat.columbia.edu/gelman/research/unpublished/forking.pdf)
+- McElreath – [Statistical Rethinking](https://xcelab.net/rm/)
+- [The ASA Statement on P-Values](https://www.tandfonline.com/doi/full/10.1080/00031305.2016.1154108)
+- Gigerenzer – [Mindless Statistics](https://www.ime.usp.br/~abe/lista/pdfVZSdqrML7E.pdf)
+
+## Additional Resources {.center}
+
+- [Hack Your Way to Scientific Glory](https://stats.andrewheiss.com/hack-your-way/)
+- [Visualisations (of Key Concepts in Statistics)](https://rpsychologist.com/viz/)
+
+# Thank You!
+
+Contact:
+<br>
+
+<ul >
+{{< fa solid envelope >}} [paul.johnson50@nhs.net](mailto: paul.johnson50@nhs.net)
+</ul>
+
+
+Code & Slides:
+<br>
+
+<ul >
+{{< fa brands github >}}[/NHS-South-Central-and-West/matters-of-significance](https://github.com/nhs-south-central-and-west/matters-of-significance)
+</ul>
+
+## References
