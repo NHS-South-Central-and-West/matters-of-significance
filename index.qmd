@@ -307,7 +307,7 @@ create_regression_table(lm_results)
 
 ## It is All This Guy's Fault {.center}
 
-![Ronald A. Fisher](assets/images/nerds/fisher.webp)
+![Ronald A. Fisher](assets/images/nerds/fisher.jpg)
 
 ## And a Little Bit These Guys {.center}
 
